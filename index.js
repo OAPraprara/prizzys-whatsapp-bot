@@ -10,7 +10,7 @@ const {
     Browsers,
     fetchLatestBaileysVersion
 } = require('@whiskeysockets/baileys');
-const qrcode = require('qrcode'); // Changed this!
+const qrcode = require('qrcode'); 
 const pino = require('pino');
 
 const app = express();
@@ -19,7 +19,7 @@ app.use(express.json());
 const MONGO_URL = process.env.MONGO_URL;
 let sock; 
 let mongoClient; 
-let qrCodeData = null; // Holds the live QR code image
+let qrCodeData = null; 
 
 // ---------------------------------------------------------
 // Custom MongoDB Auth State Adapter
@@ -108,7 +108,6 @@ async function connectToWhatsApp() {
     sock.ev.on('connection.update', (update) => {
         const { connection, lastDisconnect, qr } = update;
         
-        // If a new QR code is generated, convert it to an image URL
         if (qr) {
             console.log("\nNew QR Code generated! Go to /qr to scan it.");
             qrcode.toDataURL(qr, (err, url) => {
@@ -127,11 +126,11 @@ async function connectToWhatsApp() {
                 setTimeout(() => connectToWhatsApp(), 5000); 
             } else {
                 console.log('Logged out. Please drop the MongoDB collection to generate a new QR code.');
-                qrCodeData = null; // Clear QR if logged out completely
+                qrCodeData = null; 
             }
         } else if (connection === 'open') {
             console.log('WhatsApp connection successfully opened!');
-            qrCodeData = null; // Clear the QR code from memory once connected!
+            qrCodeData = null; 
         }
     });
 }
@@ -140,7 +139,6 @@ async function connectToWhatsApp() {
 // Express Web Routes
 // ---------------------------------------------------------
 
-// 1. Webhook Endpoint for Google Forms
 app.post('/send-message', async (req, res) => {
     const { name, phone } = req.body;
     
@@ -149,18 +147,24 @@ app.post('/send-message', async (req, res) => {
     }
 
     try {
+        // Double check that the socket is actually ready
+        if (!sock) {
+            console.error("Webhook hit but WhatsApp socket is missing!");
+            return res.status(503).json({ error: "WhatsApp not ready" });
+        }
+
         const jid = `${phone}@s.whatsapp.net`;
-        const message = `Hi ${name}. This is just to let you know your Prizzys order was received. The details were sent to your Gmail. TY!`;
+        const message = `Hi ${name}. This just to let you know your prizzys order was received. The details was sent to your gmail. TY`;
 
         await sock.sendMessage(jid, { text: message });
         res.status(200).json({ success: true, message: "WhatsApp message sent!" });
+        console.log(`Message successfully sent to ${phone}`);
     } catch (error) {
         console.error("Failed to send message:", error);
         res.status(500).json({ error: "Failed to send message" });
     }
 });
 
-// 2. Visual QR Code Endpoint
 app.get('/qr', (req, res) => {
     if (!qrCodeData) {
         return res.send(`
@@ -187,8 +191,20 @@ app.get('/qr', (req, res) => {
     `);
 });
 
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-    console.log(`Server running on port ${PORT}`);
-    connectToWhatsApp();
-});
+// ---------------------------------------------------------
+// The Cold-Start Fix: Wait for WhatsApp BEFORE starting Express
+// ---------------------------------------------------------
+async function startApp() {
+    console.log("Starting server boot sequence...");
+    
+    // 1. Wait for MongoDB and WhatsApp to initialize
+    await connectToWhatsApp(); 
+    
+    // 2. Only open the webhook endpoint AFTER WhatsApp is ready
+    const PORT = process.env.PORT || 3000;
+    app.listen(PORT, () => {
+        console.log(`Server running and listening for webhooks on port ${PORT}`);
+    });
+}
+
+startApp();
