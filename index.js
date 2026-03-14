@@ -81,6 +81,11 @@ async function useMongoDBAuthState(collection) {
 // ---------------------------------------------------------
 // Core WhatsApp Connection Logic
 // ---------------------------------------------------------
+// ... (keep the top of your file and useMongoDBAuthState exactly the same) ...
+
+// ---------------------------------------------------------
+// Core WhatsApp Connection Logic
+// ---------------------------------------------------------
 async function connectToWhatsApp() {
     if (!mongoClient) {
         console.log("Connecting to MongoDB...");
@@ -100,7 +105,12 @@ async function connectToWhatsApp() {
         auth: state,
         printQRInTerminal: false,
         browser: Browsers.macOS('Desktop'),
-        logger: pino({ level: 'info' }) 
+        logger: pino({ level: 'info' }),
+        
+        // --- NEW SETTINGS TO FIX MONGODB CRASH ---
+        syncFullHistory: false,      // Do not download old chat history
+        markOnlineOnConnect: false,  // Do not broadcast "Online" status to everyone
+        generateHighQualityLinkPreviews: false // Saves memory
     });
 
     sock.ev.on('creds.update', saveCreds);
@@ -134,6 +144,8 @@ async function connectToWhatsApp() {
         }
     });
 }
+
+// ... (keep your express app.post, app.get, and startApp exactly the same) ...
 
 // ---------------------------------------------------------
 // Express Web Routes
