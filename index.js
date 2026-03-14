@@ -22,20 +22,29 @@ let mongoClient;
 let qrCodeData = null; 
 
 // ---------------------------------------------------------
-// Custom MongoDB Auth State Adapter
+// UPDATED: Custom MongoDB Auth State Adapter (Safe Wrapper)
 // ---------------------------------------------------------
 async function useMongoDBAuthState(collection) {
     const writeData = (data, id) => {
-        return collection.replaceOne({ _id: id }, JSON.parse(JSON.stringify(data, BufferJSON.replacer)), { upsert: true });
+        // We wrap the data inside a 'payload' object so MongoDB never complains about data types
+        const payload = JSON.parse(JSON.stringify(data, BufferJSON.replacer));
+        return collection.replaceOne(
+            { _id: id }, 
+            { _id: id, data: payload }, // WRAPPED!
+            { upsert: true }
+        );
     };
+    
     const readData = async (id) => {
         try {
-            const data = await collection.findOne({ _id: id });
-            return data ? JSON.parse(JSON.stringify(data), BufferJSON.reviver) : null;
+            const doc = await collection.findOne({ _id: id });
+            // UNWRAP the data when pulling from MongoDB
+            return doc && doc.data ? JSON.parse(JSON.stringify(doc.data), BufferJSON.reviver) : null;
         } catch (error) {
             return null;
         }
     };
+    
     const removeData = async (id) => {
         try {
             await collection.deleteOne({ _id: id });
@@ -81,11 +90,6 @@ async function useMongoDBAuthState(collection) {
 // ---------------------------------------------------------
 // Core WhatsApp Connection Logic
 // ---------------------------------------------------------
-// ... (keep the top of your file and useMongoDBAuthState exactly the same) ...
-
-// ---------------------------------------------------------
-// Core WhatsApp Connection Logic
-// ---------------------------------------------------------
 async function connectToWhatsApp() {
     if (!mongoClient) {
         console.log("Connecting to MongoDB...");
@@ -106,11 +110,9 @@ async function connectToWhatsApp() {
         printQRInTerminal: false,
         browser: Browsers.macOS('Desktop'),
         logger: pino({ level: 'info' }),
-        
-        // --- NEW SETTINGS TO FIX MONGODB CRASH ---
-        syncFullHistory: false,      // Do not download old chat history
-        markOnlineOnConnect: false,  // Do not broadcast "Online" status to everyone
-        generateHighQualityLinkPreviews: false // Saves memory
+        syncFullHistory: false,      
+        markOnlineOnConnect: false,  
+        generateHighQualityLinkPreviews: false 
     });
 
     sock.ev.on('creds.update', saveCreds);
@@ -145,12 +147,9 @@ async function connectToWhatsApp() {
     });
 }
 
-// ... (keep your express app.post, app.get, and startApp exactly the same) ...
-
 // ---------------------------------------------------------
 // Express Web Routes
 // ---------------------------------------------------------
-
 app.post('/send-message', async (req, res) => {
     const { name, phone } = req.body;
     
@@ -159,7 +158,6 @@ app.post('/send-message', async (req, res) => {
     }
 
     try {
-        // Double check that the socket is actually ready
         if (!sock) {
             console.error("Webhook hit but WhatsApp socket is missing!");
             return res.status(503).json({ error: "WhatsApp not ready" });
@@ -204,15 +202,11 @@ app.get('/qr', (req, res) => {
 });
 
 // ---------------------------------------------------------
-// The Cold-Start Fix: Wait for WhatsApp BEFORE starting Express
+// Boot Sequence
 // ---------------------------------------------------------
 async function startApp() {
     console.log("Starting server boot sequence...");
-    
-    // 1. Wait for MongoDB and WhatsApp to initialize
     await connectToWhatsApp(); 
-    
-    // 2. Only open the webhook endpoint AFTER WhatsApp is ready
     const PORT = process.env.PORT || 3000;
     app.listen(PORT, () => {
         console.log(`Server running and listening for webhooks on port ${PORT}`);
