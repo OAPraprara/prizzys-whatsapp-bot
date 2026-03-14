@@ -7,11 +7,13 @@ app.use(express.json())
 
 const client = new Client({
 
-    authStrategy: new LocalAuth(),
+    authStrategy: new LocalAuth(
+      clientId: "prizzys-bot"
+    ),
 
     puppeteer: {
         headless: true,
-        executablePath: process.env.CHROME_PATH || undefined,
+        
         args: [
             "--no-sandbox",
             "--disable-setuid-sandbox"
