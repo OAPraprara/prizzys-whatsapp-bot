@@ -7,9 +7,9 @@ app.use(express.json())
 
 const client = new Client({
 
-    authStrategy: new LocalAuth(
+    authStrategy: new LocalAuth({
       clientId: "prizzys-bot"
-    ),
+}),
 
     puppeteer: {
         headless: true,
