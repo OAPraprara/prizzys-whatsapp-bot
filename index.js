@@ -7,7 +7,8 @@ const {
     BufferJSON, 
     initAuthCreds,
     proto,
-    Browsers
+    Browsers,
+    fetchLatestBaileysVersion // <--- Brought this back!
 } = require('@whiskeysockets/baileys');
 const qrcode = require('qrcode'); 
 const pino = require('pino');
@@ -99,11 +100,16 @@ async function connectToWhatsApp() {
     const collection = mongoClient.db('prizzys_wa').collection('auth_state');
     const { state, saveCreds } = await useMongoDBAuthState(collection);
 
+    // <--- THIS IS WHAT PREVENTS THE 405 ERROR --->
+    const { version, isLatest } = await fetchLatestBaileysVersion();
+    console.log(`Using WhatsApp Web v${version.join('.')}, isLatest: ${isLatest}`);
+
     sock = makeWASocket({
+        version, // <--- AND THIS
         auth: state,
         printQRInTerminal: false,
         browser: Browsers.ubuntu('Chrome'), 
-        logger: pino({ level: 'info' }), // TURNED LOGS BACK ON
+        logger: pino({ level: 'info' }), 
         syncFullHistory: false,      
         markOnlineOnConnect: true,  
         generateHighQualityLinkPreviews: false 
@@ -209,7 +215,6 @@ app.get('/qr', (req, res) => {
     `);
 });
 
-// THE MAGIC RESET BUTTON
 app.get('/reset', async (req, res) => {
     try {
         if (mongoClient) {
