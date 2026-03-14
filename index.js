@@ -20,17 +20,17 @@ const MONGO_URL = process.env.MONGO_URL;
 let sock; 
 let mongoClient; 
 let qrCodeData = null; 
+let isConnected = false; // Tracks if WhatsApp is actually ready to send messages
 
 // ---------------------------------------------------------
-// UPDATED: Custom MongoDB Auth State Adapter (Safe Wrapper)
+// Custom MongoDB Auth State Adapter (Safe Wrapper)
 // ---------------------------------------------------------
 async function useMongoDBAuthState(collection) {
     const writeData = (data, id) => {
-        // We wrap the data inside a 'payload' object so MongoDB never complains about data types
         const payload = JSON.parse(JSON.stringify(data, BufferJSON.replacer));
         return collection.replaceOne(
             { _id: id }, 
-            { _id: id, data: payload }, // WRAPPED!
+            { _id: id, data: payload }, 
             { upsert: true }
         );
     };
@@ -38,7 +38,6 @@ async function useMongoDBAuthState(collection) {
     const readData = async (id) => {
         try {
             const doc = await collection.findOne({ _id: id });
-            // UNWRAP the data when pulling from MongoDB
             return doc && doc.data ? JSON.parse(JSON.stringify(doc.data), BufferJSON.reviver) : null;
         } catch (error) {
             return null;
@@ -130,6 +129,7 @@ async function connectToWhatsApp() {
         }
 
         if (connection === 'close') {
+            isConnected = false; // Mark as offline
             const shouldReconnect = lastDisconnect.error?.output?.statusCode !== DisconnectReason.loggedOut;
             console.log('Connection closed due to error:', lastDisconnect.error?.message || lastDisconnect.error);
             console.log('Reconnecting:', shouldReconnect);
@@ -142,6 +142,7 @@ async function connectToWhatsApp() {
             }
         } else if (connection === 'open') {
             console.log('WhatsApp connection successfully opened!');
+            isConnected = true; // Bot is fully awake and ready to send!
             qrCodeData = null; 
         }
     });
@@ -151,15 +152,27 @@ async function connectToWhatsApp() {
 // Express Web Routes
 // ---------------------------------------------------------
 app.post('/send-message', async (req, res) => {
+    console.log("\n====== WEBHOOK RECEIVED ======");
+    console.log("Payload from Google Form:", req.body);
+
     const { name, phone } = req.body;
     
     if (!name || !phone) {
+        console.error("❌ Missing name or phone in payload");
         return res.status(400).json({ error: "Missing name or phone" });
     }
 
     try {
-        if (!sock) {
-            console.error("Webhook hit but WhatsApp socket is missing!");
+        // THE WAITING ROOM: Check if WhatsApp is open every 2 seconds (up to 20 seconds total)
+        let attempts = 0;
+        while (!isConnected && attempts < 10) {
+            console.log(`WhatsApp not open yet. Waiting... (Attempt ${attempts + 1}/10)`);
+            await new Promise(resolve => setTimeout(resolve, 2000));
+            attempts++;
+        }
+
+        if (!isConnected) {
+            console.error("❌ Giving up: WhatsApp never reached 'open' status.");
             return res.status(503).json({ error: "WhatsApp not ready" });
         }
 
@@ -168,9 +181,9 @@ app.post('/send-message', async (req, res) => {
 
         await sock.sendMessage(jid, { text: message });
         res.status(200).json({ success: true, message: "WhatsApp message sent!" });
-        console.log(`Message successfully sent to ${phone}`);
+        console.log(`✅ Message successfully sent to ${phone}\n`);
     } catch (error) {
-        console.error("Failed to send message:", error);
+        console.error("❌ Failed to send message:", error);
         res.status(500).json({ error: "Failed to send message" });
     }
 });
