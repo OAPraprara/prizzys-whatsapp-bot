@@ -13,10 +13,16 @@ const client = new Client({
 
     puppeteer: {
         headless: true,
-        
+        executablePath: '/usr/bin/google-chrome-stable' || '/usr/bin/chromium-browser',
         args: [
             "--no-sandbox",
-            "--disable-setuid-sandbox"
+            "--disable-setuid-sandbox",
+            '--disable-dev-shm-usage',
+            '--disable-accelerated-2d-canvas',
+            '--no-first-run',
+            '--no-zygote',
+            '--single-process',
+            '--disable-gpu'
         ]
     }
 
