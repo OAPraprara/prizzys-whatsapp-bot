@@ -1,5 +1,4 @@
 require('dotenv').config();
-
 const express = require('express');
 const { MongoClient } = require('mongodb');
 const { 
@@ -15,13 +14,12 @@ const pino = require('pino');
 const app = express();
 app.use(express.json());
 
-// Set this in your Render Environment Variables later
-const MONGO_URL = process.env.MONGO_URL || "YOUR_MONGODB_CONNECTION_STRING";
-let sock; // Global socket variable
+const MONGO_URL = process.env.MONGO_URL;
+let sock; 
+let mongoClient; // Keeps the DB connection global so we don't spam MongoDB
 
 // ---------------------------------------------------------
 // Custom MongoDB Auth State Adapter
-// This replaces useMultiFileAuthState to survive Render reboots
 // ---------------------------------------------------------
 async function useMongoDBAuthState(collection) {
     const writeData = (data, id) => {
@@ -81,18 +79,24 @@ async function useMongoDBAuthState(collection) {
 // Core WhatsApp Connection Logic
 // ---------------------------------------------------------
 async function connectToWhatsApp() {
-    console.log("Connecting to MongoDB...");
-    const client = new MongoClient(MONGO_URL);
-    await client.connect();
+    // Only connect to MongoDB once!
+    if (!mongoClient) {
+        console.log("Connecting to MongoDB...");
+        mongoClient = new MongoClient(MONGO_URL);
+        await mongoClient.connect();
+        console.log("MongoDB connected successfully!");
+    }
     
-    // Creates a database named "prizzys_wa" and a collection named "auth_state"
-    const collection = client.db('prizzys_wa').collection('auth_state');
+    const collection = mongoClient.db('prizzys_wa').collection('auth_state');
     const { state, saveCreds } = await useMongoDBAuthState(collection);
 
     sock = makeWASocket({
         auth: state,
-        printQRInTerminal: false, // We handle this manually below
-        logger: pino({ level: 'silent' }) // Keeps your terminal clean
+        printQRInTerminal: false,
+        // Spoofing a standard Chrome browser prevents Meta from instantly dropping the connection
+        browser: ["PrizzysBot", "Chrome", "20.0.04"],
+        // Set to 'info' so Render logs will show us exactly why it crashes if it fails again
+        logger: pino({ level: 'info' }) 
     });
 
     sock.ev.on('creds.update', saveCreds);
@@ -101,15 +105,22 @@ async function connectToWhatsApp() {
         const { connection, lastDisconnect, qr } = update;
         
         if (qr) {
-            console.log("\nScan this QR code to link your Prizzys WhatsApp:");
+            console.log("\n=======================================================");
+            console.log("Scan this QR code to link your Prizzys WhatsApp:");
             qrcode.generate(qr, { small: true });
+            console.log("=======================================================\n");
         }
 
         if (connection === 'close') {
             const shouldReconnect = lastDisconnect.error?.output?.statusCode !== DisconnectReason.loggedOut;
-            console.log('Connection closed. Reconnecting:', shouldReconnect);
+            
+            // This will print the exact reason Meta rejected the connection
+            console.log('Connection closed due to error:', lastDisconnect.error?.message || lastDisconnect.error);
+            console.log('Reconnecting:', shouldReconnect);
+            
             if (shouldReconnect) {
-                connectToWhatsApp();
+                // Add a 5-second delay so we don't accidentally get rate-limited
+                setTimeout(() => connectToWhatsApp(), 5000); 
             } else {
                 console.log('You logged out from your phone. Please delete the MongoDB collection to generate a new QR code.');
             }
@@ -130,7 +141,6 @@ app.post('/send-message', async (req, res) => {
     }
 
     try {
-        // Baileys requires the phone number to end with @s.whatsapp.net
         const jid = `${phone}@s.whatsapp.net`;
         const message = `Hi ${name}. This is just to let you know your Prizzys order was received. The details were sent to your Gmail. TY!`;
 
