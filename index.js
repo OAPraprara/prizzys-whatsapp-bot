@@ -20,7 +20,6 @@ let sock;
 let mongoClient; 
 let qrCodeData = null; 
 let isConnected = false; 
-let isReconnecting = false; 
 
 // ---------------------------------------------------------
 // Custom MongoDB Auth State Adapter (Safe Wrapper)
@@ -91,8 +90,10 @@ async function useMongoDBAuthState(collection) {
 // ---------------------------------------------------------
 async function connectToWhatsApp() {
     if (!mongoClient) {
+        console.log("Connecting to MongoDB...");
         mongoClient = new MongoClient(MONGO_URL);
         await mongoClient.connect();
+        console.log("MongoDB connected successfully!");
     }
     
     const collection = mongoClient.db('prizzys_wa').collection('auth_state');
@@ -101,10 +102,8 @@ async function connectToWhatsApp() {
     sock = makeWASocket({
         auth: state,
         printQRInTerminal: false,
-        // Ubuntu is much more stable for cloud spoofing
         browser: Browsers.ubuntu('Chrome'), 
-        // Silence the noisy Baileys logs so we can see the webhook!
-        logger: pino({ level: 'silent' }), 
+        logger: pino({ level: 'info' }), // TURNED LOGS BACK ON
         syncFullHistory: false,      
         markOnlineOnConnect: true,  
         generateHighQualityLinkPreviews: false 
@@ -116,6 +115,7 @@ async function connectToWhatsApp() {
         const { connection, lastDisconnect, qr } = update;
         
         if (qr) {
+            console.log("\nNew QR Code generated! Go to /qr to scan it.");
             qrcode.toDataURL(qr, (err, url) => {
                 if (!err) qrCodeData = url;
             });
@@ -126,13 +126,13 @@ async function connectToWhatsApp() {
             const statusCode = lastDisconnect.error?.output?.statusCode;
             const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
             
-            if (shouldReconnect && !isReconnecting) {
-                isReconnecting = true;
-                setTimeout(() => {
-                    connectToWhatsApp();
-                    isReconnecting = false;
-                }, 5000); 
-            } else if (!shouldReconnect) {
+            console.log('Connection closed. Status code:', statusCode);
+            
+            if (shouldReconnect) {
+                console.log('Reconnecting in 5 seconds...');
+                setTimeout(() => connectToWhatsApp(), 5000); 
+            } else {
+                console.log('Logged out from phone! Please go to /reset to clear the database.');
                 qrCodeData = null; 
             }
         } else if (connection === 'open') {
@@ -146,8 +146,6 @@ async function connectToWhatsApp() {
 // ---------------------------------------------------------
 // Express Web Routes
 // ---------------------------------------------------------
-
-// GLOBAL RADAR: This catches EVERY request sent to the server
 app.use((req, res, next) => {
     console.log(`\n[${new Date().toLocaleTimeString()}] 📬 Incoming Request: ${req.method} ${req.path}`);
     next();
@@ -158,7 +156,6 @@ app.post('/send-message', async (req, res) => {
     const { name, phone } = req.body;
     
     if (!name || !phone) {
-        console.error("❌ Missing name or phone in payload");
         return res.status(400).json({ error: "Missing name or phone" });
     }
 
@@ -171,7 +168,6 @@ app.post('/send-message', async (req, res) => {
         }
 
         if (!isConnected) {
-            console.error("❌ Giving up: WhatsApp never reached 'open' status.");
             return res.status(503).json({ error: "WhatsApp not ready" });
         }
 
@@ -213,6 +209,24 @@ app.get('/qr', (req, res) => {
     `);
 });
 
+// THE MAGIC RESET BUTTON
+app.get('/reset', async (req, res) => {
+    try {
+        if (mongoClient) {
+            await mongoClient.db('prizzys_wa').collection('auth_state').drop();
+        }
+        res.send("Database wiped! Render is restarting the server to generate a new QR code. Wait 10 seconds, then go to /qr");
+        console.log("Manual reset triggered. Crashing app to force Render restart...");
+        process.exit(1); 
+    } catch (e) {
+        res.send("Database is already empty. Restarting server... go to /qr");
+        process.exit(1);
+    }
+});
+
+// ---------------------------------------------------------
+// Boot Sequence
+// ---------------------------------------------------------
 async function startApp() {
     console.log("Starting server boot sequence...");
     await connectToWhatsApp(); 
