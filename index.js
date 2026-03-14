@@ -178,7 +178,7 @@ app.post('/send-message', async (req, res) => {
         }
 
         const jid = `${phone}@s.whatsapp.net`;
-        const message = `Hi ${name}. This just to let you know your prizzys order was received. The details was sent to your gmail. TY`;
+        const message = `Hi ${name} 😁. This just to let you know your prizzys order was received. The details was sent to your gmail. à bientot 💫`;
 
         await sock.sendMessage(jid, { text: message });
         res.status(200).json({ success: true, message: "WhatsApp message sent!" });
