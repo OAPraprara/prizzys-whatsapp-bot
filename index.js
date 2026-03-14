@@ -6,7 +6,9 @@ const {
     DisconnectReason, 
     BufferJSON, 
     initAuthCreds,
-    proto
+    proto,
+    Browsers,
+    fetchLatestBaileysVersion
 } = require('@whiskeysockets/baileys');
 const qrcode = require('qrcode-terminal');
 const pino = require('pino');
@@ -16,7 +18,7 @@ app.use(express.json());
 
 const MONGO_URL = process.env.MONGO_URL;
 let sock; 
-let mongoClient; // Keeps the DB connection global so we don't spam MongoDB
+let mongoClient; 
 
 // ---------------------------------------------------------
 // Custom MongoDB Auth State Adapter
@@ -79,7 +81,6 @@ async function useMongoDBAuthState(collection) {
 // Core WhatsApp Connection Logic
 // ---------------------------------------------------------
 async function connectToWhatsApp() {
-    // Only connect to MongoDB once!
     if (!mongoClient) {
         console.log("Connecting to MongoDB...");
         mongoClient = new MongoClient(MONGO_URL);
@@ -90,12 +91,16 @@ async function connectToWhatsApp() {
     const collection = mongoClient.db('prizzys_wa').collection('auth_state');
     const { state, saveCreds } = await useMongoDBAuthState(collection);
 
+    // Fetch the absolute latest WhatsApp Web version to prevent rejection
+    const { version, isLatest } = await fetchLatestBaileysVersion();
+    console.log(`Using WhatsApp Web v${version.join('.')}, isLatest: ${isLatest}`);
+
     sock = makeWASocket({
+        version,
         auth: state,
         printQRInTerminal: false,
-        // Spoofing a standard Chrome browser prevents Meta from instantly dropping the connection
-        browser: ["PrizzysBot", "Chrome", "20.0.04"],
-        // Set to 'info' so Render logs will show us exactly why it crashes if it fails again
+        // Perfect spoofing of a standard Mac desktop browser
+        browser: Browsers.macOS('Desktop'),
         logger: pino({ level: 'info' }) 
     });
 
@@ -113,16 +118,13 @@ async function connectToWhatsApp() {
 
         if (connection === 'close') {
             const shouldReconnect = lastDisconnect.error?.output?.statusCode !== DisconnectReason.loggedOut;
-            
-            // This will print the exact reason Meta rejected the connection
             console.log('Connection closed due to error:', lastDisconnect.error?.message || lastDisconnect.error);
             console.log('Reconnecting:', shouldReconnect);
             
             if (shouldReconnect) {
-                // Add a 5-second delay so we don't accidentally get rate-limited
                 setTimeout(() => connectToWhatsApp(), 5000); 
             } else {
-                console.log('You logged out from your phone. Please delete the MongoDB collection to generate a new QR code.');
+                console.log('Logged out. Please drop the MongoDB collection to generate a new QR code.');
             }
         } else if (connection === 'open') {
             console.log('WhatsApp connection successfully opened!');
