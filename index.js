@@ -7,8 +7,7 @@ const {
     BufferJSON, 
     initAuthCreds,
     proto,
-    Browsers,
-    fetchLatestBaileysVersion
+    Browsers
 } = require('@whiskeysockets/baileys');
 const qrcode = require('qrcode'); 
 const pino = require('pino');
@@ -20,7 +19,8 @@ const MONGO_URL = process.env.MONGO_URL;
 let sock; 
 let mongoClient; 
 let qrCodeData = null; 
-let isConnected = false; // Tracks if WhatsApp is actually ready to send messages
+let isConnected = false; 
+let isReconnecting = false; 
 
 // ---------------------------------------------------------
 // Custom MongoDB Auth State Adapter (Safe Wrapper)
@@ -91,26 +91,22 @@ async function useMongoDBAuthState(collection) {
 // ---------------------------------------------------------
 async function connectToWhatsApp() {
     if (!mongoClient) {
-        console.log("Connecting to MongoDB...");
         mongoClient = new MongoClient(MONGO_URL);
         await mongoClient.connect();
-        console.log("MongoDB connected successfully!");
     }
     
     const collection = mongoClient.db('prizzys_wa').collection('auth_state');
     const { state, saveCreds } = await useMongoDBAuthState(collection);
 
-    const { version, isLatest } = await fetchLatestBaileysVersion();
-    console.log(`Using WhatsApp Web v${version.join('.')}, isLatest: ${isLatest}`);
-
     sock = makeWASocket({
-        version,
         auth: state,
         printQRInTerminal: false,
-        browser: Browsers.macOS('Desktop'),
-        logger: pino({ level: 'info' }),
+        // Ubuntu is much more stable for cloud spoofing
+        browser: Browsers.ubuntu('Chrome'), 
+        // Silence the noisy Baileys logs so we can see the webhook!
+        logger: pino({ level: 'silent' }), 
         syncFullHistory: false,      
-        markOnlineOnConnect: false,  
+        markOnlineOnConnect: true,  
         generateHighQualityLinkPreviews: false 
     });
 
@@ -120,30 +116,29 @@ async function connectToWhatsApp() {
         const { connection, lastDisconnect, qr } = update;
         
         if (qr) {
-            console.log("\nNew QR Code generated! Go to /qr to scan it.");
             qrcode.toDataURL(qr, (err, url) => {
-                if (!err) {
-                    qrCodeData = url;
-                }
+                if (!err) qrCodeData = url;
             });
         }
 
         if (connection === 'close') {
-            isConnected = false; // Mark as offline
-            const shouldReconnect = lastDisconnect.error?.output?.statusCode !== DisconnectReason.loggedOut;
-            console.log('Connection closed due to error:', lastDisconnect.error?.message || lastDisconnect.error);
-            console.log('Reconnecting:', shouldReconnect);
+            isConnected = false; 
+            const statusCode = lastDisconnect.error?.output?.statusCode;
+            const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
             
-            if (shouldReconnect) {
-                setTimeout(() => connectToWhatsApp(), 5000); 
-            } else {
-                console.log('Logged out. Please drop the MongoDB collection to generate a new QR code.');
+            if (shouldReconnect && !isReconnecting) {
+                isReconnecting = true;
+                setTimeout(() => {
+                    connectToWhatsApp();
+                    isReconnecting = false;
+                }, 5000); 
+            } else if (!shouldReconnect) {
                 qrCodeData = null; 
             }
         } else if (connection === 'open') {
-            console.log('WhatsApp connection successfully opened!');
-            isConnected = true; // Bot is fully awake and ready to send!
+            isConnected = true; 
             qrCodeData = null; 
+            console.log('\n✅ WhatsApp is OPEN and ready for webhooks!');
         }
     });
 }
@@ -151,10 +146,15 @@ async function connectToWhatsApp() {
 // ---------------------------------------------------------
 // Express Web Routes
 // ---------------------------------------------------------
-app.post('/send-message', async (req, res) => {
-    console.log("\n====== WEBHOOK RECEIVED ======");
-    console.log("Payload from Google Form:", req.body);
 
+// GLOBAL RADAR: This catches EVERY request sent to the server
+app.use((req, res, next) => {
+    console.log(`\n[${new Date().toLocaleTimeString()}] 📬 Incoming Request: ${req.method} ${req.path}`);
+    next();
+});
+
+app.post('/send-message', async (req, res) => {
+    console.log("Payload from Google Form:", req.body);
     const { name, phone } = req.body;
     
     if (!name || !phone) {
@@ -163,7 +163,6 @@ app.post('/send-message', async (req, res) => {
     }
 
     try {
-        // THE WAITING ROOM: Check if WhatsApp is open every 2 seconds (up to 20 seconds total)
         let attempts = 0;
         while (!isConnected && attempts < 10) {
             console.log(`WhatsApp not open yet. Waiting... (Attempt ${attempts + 1}/10)`);
@@ -181,7 +180,7 @@ app.post('/send-message', async (req, res) => {
 
         await sock.sendMessage(jid, { text: message });
         res.status(200).json({ success: true, message: "WhatsApp message sent!" });
-        console.log(`✅ Message successfully sent to ${phone}\n`);
+        console.log(`✅ Message successfully sent to ${phone}`);
     } catch (error) {
         console.error("❌ Failed to send message:", error);
         res.status(500).json({ error: "Failed to send message" });
@@ -214,9 +213,6 @@ app.get('/qr', (req, res) => {
     `);
 });
 
-// ---------------------------------------------------------
-// Boot Sequence
-// ---------------------------------------------------------
 async function startApp() {
     console.log("Starting server boot sequence...");
     await connectToWhatsApp(); 
